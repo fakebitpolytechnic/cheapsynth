@@ -35,14 +35,16 @@ detuning on pitch bend strip, massive upwards zoom on both notes when no portame
 Mode 4 - intentionally left blank so you know where you are
 
 Standard controls:
-Note decay length on forward arrow to the right of big transparent Mode button (currently applies 
-to less computationally demanding envelopes in Mode 0 and 2), toggles between short/medium/long
 
 Different modulation freq harmonics on the right-hand corner up and down keys between octave up
 and octave down (all modes except Mode 2).
 
 Portamento speed on Back arrow to the left of big transparent Mode button, toggles between no portamento
 (ie 2-note polyphony in modes that support it), 10ms fast glide between notes, 400ms slow glide.
+
+[updated: this note decay now doesn't do anything as I've moved everything to "slow" ADSR..!]
+Note decay length on forward arrow to the right of big transparent Mode button (currently applies 
+to less computationally demanding envelopes in Mode 0 and 2), toggles between short/medium/long
 */
 
 #include <MIDI.h>
@@ -53,7 +55,7 @@ Portamento speed on Back arrow to the left of big transparent Mode button, toggl
 #include <tables/saw1024_int8.h> // table for Oscils to play
 #include <tables/smoothsquare8192_int8.h> // NB portamento requires table > 512 size?
 #include <mozzi_midi.h>
-#include <ADSR.h>
+#include <ADSRslow.h>
 #include <mozzi_fixmath.h>
 #include <LowPassFilter.h>
 #include <Portamento.h>
@@ -76,7 +78,7 @@ Oscil<SAW1024_NUM_CELLS, AUDIO_RATE> oscSaw2(SAW1024_DATA);
 // envelope generator
 ADSR <CONTROL_RATE> envelope;
 ADSR <CONTROL_RATE> envelope2;
-Ead kEnvelopeGuitar1(CONTROL_RATE);
+Ead kEnvelopeGuitar1(CONTROL_RATE); //left in here for future use but currently not vital?
 Ead kEnvelopeGuitar2(CONTROL_RATE);
 
 Portamento <CONTROL_RATE>aPortamento;
@@ -87,8 +89,8 @@ Portamento <CONTROL_RATE>aPortamento;
 
 long vibrato=0;
 long vibrato2=0;
-int gainGuitar1;
-int gainGuitar2;
+int chanGain1;
+int chanGain2;
 int LFO;
 unsigned int carrierXmodDepth1;
 unsigned int carrierXmodDepth2;
@@ -136,9 +138,9 @@ void setup() {
   MIDI.setHandleStart(HandleStart); 
 
   envelope.setADLevels(127,100);
-  envelope.setTimes(20,20,20000,850); // 20000 is so the note will sustain 20 seconds unless a noteOff comes
+  envelope.setTimes(20,20,20000,1200); // 20000 is so the note will sustain 20 seconds unless a noteOff comes
   envelope2.setADLevels(127,100);
-  envelope2.setTimes(20,20,20000,850); // 20000 is so the note will sustain 20 seconds unless a noteOff comes
+  envelope2.setTimes(20,20,20000,1200); // 20000 is so the note will sustain 20 seconds unless a noteOff comes
 
   kEnvelopeGuitar1.set(20, 4000);
   kEnvelopeGuitar2.set(20, 4000);
@@ -214,7 +216,7 @@ void HandleStop () { //this is the Back button on the Xbox keyboard
   aPortamento.setTime( (portSpeed*portSpeed*100) ); // values of 0,100,400 milliseconds? (next 900)
 }
 
-void HandleStart () { //this is the "Start" button on the Xbox keyboard
+void HandleStart () { //CURRENTLY NOT USED 
  noteLength=(noteLength+1)%3; // loop from 0-2
    kEnvelopeGuitar1.set(20, (noteLength+1)*(noteLength+1)*(noteLength+1)*500 );
    kEnvelopeGuitar2.set(20, (noteLength+1)*(noteLength+1)*(noteLength+1)*500 );
@@ -232,12 +234,12 @@ void HandleNoteOff(byte channel, byte note, byte velocity) {
   if ( (note == lastnote1) ) //kill envelope if prev note released 
   {
   envelope.noteOff(); 
-  if (gainGuitar2>0) {nextenv=1;}
+  if (chanGain2) {nextenv=1;}
 } 
 
   if ( (note == lastnote2) ) 
   {envelope2.noteOff(); 
-  if (gainGuitar1>0) {nextenv=2;}
+  if (chanGain1) {nextenv=2;}
   }
   
 }
@@ -295,10 +297,13 @@ void updateControl(){
   envelope.update();
   envelope2.update();
 
-  gainGuitar1 = kEnvelopeGuitar1.next();
-  gainGuitar2 = kEnvelopeGuitar2.next();
-  if(gainGuitar1 > 120) gainGuitar1 = 120;
-  if(gainGuitar2 > 120) gainGuitar2 = 120;
+  chanGain1 = envelope.next();
+  chanGain2 = envelope2.next();
+
+//  chanGain1 = kEnvelopeGuitar1.next();
+//  chanGain2 = kEnvelopeGuitar2.next();
+  if(chanGain1 > 120) chanGain1 = 120;
+  if(chanGain2 > 120) chanGain2 = 120;
 
 if ( portSpeed ) 
   {
@@ -335,8 +340,8 @@ vibrato*= carrierXmodDepth1;
 vibrato2 = ( LFO * oscModulator2.next() ) >>7 ;
 vibrato2*= carrierXmodDepth2;
 return (int) (
-              (oscCarrier.phMod( vibrato >>3 ) * gainGuitar1 ) 
-            + (oscSquare2.phMod( vibrato2>>3 ) * gainGuitar2 ) 
+              (oscCarrier.phMod( vibrato >>3 ) * chanGain1 ) 
+            + (oscSquare2.phMod( vibrato2>>3 ) * chanGain2 ) 
             ) >> 9;
 // >> 9 = 9 fast binary divisions by 2 = divide by 512
   break;
@@ -347,22 +352,22 @@ squaredsin1= ( (oscModulator.next() & bitmask) ) <<multiplier;
 squaredsin2= ( (oscModulator2.next() & bitmask) ) <<multiplier;
 return (int) 
 ( 
-  ( ( (oscCarrier.next() + squaredsin1 )>>1 )*envelope.next() )
-+ ( ( (oscSquare2.next() + squaredsin2 )>>1 )*envelope2.next() )
+  ( ( (oscCarrier.next() + squaredsin1 )>>1 )* chanGain1 )
++ ( ( (oscSquare2.next() + squaredsin2 )>>1 )* chanGain2 )
 ) >> 8;
   break;
 
   case 2: // 2 tri poly
 return (int)( 
-             ( oscSaw1.next() *gainGuitar1 )
-           + ( oscSaw2.next() *gainGuitar2 ) 
+             ( oscSaw1.next() *chanGain1 )
+           + ( oscSaw2.next() *chanGain2 ) 
             ) >> 9;
   break;
 
   case 3: // STARTED AS 2 sq poly XORd with respective sines, now big whoop
 return (int)(
-             ( (oscCarrier.next()^oscModulator.next()) * envelope.next() )  
-           + ( (oscSquare2.next()^oscModulator2.next()) * envelope2.next() ) 
+             ( (oscCarrier.next()^oscModulator.next()) * chanGain1 )  
+           + ( (oscSquare2.next()^oscModulator2.next())* chanGain2 ) 
             ) >> 8;
 //return (int) ( (oscCarrier.next() | ( (oscModulator.next() * int (modDepth+1))>>3 ) )  * (envelope.next() ) ) >> 7;
   break;
